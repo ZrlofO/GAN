@@ -19,6 +19,17 @@ import torch
 import torch.nn as nn
 
 
+def init_weights(module):
+    """Weight initialization of DCGAN: N(0, 0.02) for the convolutions."""
+    if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+        nn.init.normal_(module.weight, 0.0, 0.02)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    elif isinstance(module, nn.BatchNorm2d):
+        nn.init.normal_(module.weight, 1.0, 0.02)
+        nn.init.zeros_(module.bias)
+
+
 class Generator(nn.Module):
     def __init__(self):
         """Define the layers of the generator.
@@ -29,8 +40,22 @@ class Generator(nn.Module):
         Must set `self.latent_dim` (int, at least 2): the dimension of z.
         """
         super().__init__()
-        # TODO: set self.latent_dim and define the layers
-        raise NotImplementedError("mymodel.py: Generator.__init__ is not implemented")
+        self.latent_dim = 100
+        # DCGAN: (B, 100, 1, 1) -> 4x4 -> 8x8 -> 16x16 -> 32x32
+        self.net = nn.Sequential(
+            nn.ConvTranspose2d(self.latent_dim, 256, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(64, 1, 4, 2, 1),
+            nn.Sigmoid(),
+        )
+        self.apply(init_weights)
 
     def forward(self, z):
         """Generator: images G(z) generated from the latent variables z.
@@ -41,8 +66,7 @@ class Generator(nn.Module):
         Returns:
             generated images, shape (B, 1, 32, 32), values in [0, 1].
         """
-        # TODO
-        raise NotImplementedError("mymodel.py: Generator.forward is not implemented")
+        return self.net(z.view(z.size(0), self.latent_dim, 1, 1))
 
 
 class Discriminator(nn.Module):
@@ -53,8 +77,19 @@ class Discriminator(nn.Module):
         every argument you add needs a default value.
         """
         super().__init__()
-        # TODO: define the layers
-        raise NotImplementedError("mymodel.py: Discriminator.__init__ is not implemented")
+        # DCGAN: 32x32 -> 16x16 -> 8x8 -> 4x4 -> 1x1
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 64, 4, 2, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(128, 256, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(256, 1, 4, 1, 0),
+        )
+        self.apply(init_weights)
 
     def forward(self, x):
         """Discriminator: one logit per image.
@@ -68,5 +103,4 @@ class Discriminator(nn.Module):
         Returns:
             logits, shape (B,).
         """
-        # TODO
-        raise NotImplementedError("mymodel.py: Discriminator.forward is not implemented")
+        return self.net(x).view(-1)

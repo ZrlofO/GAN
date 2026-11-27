@@ -13,6 +13,37 @@ Notation
 import torch
 import torch.nn.functional as F
 
+# Number of updates of the generator for one update of the discriminator
+GENERATOR_STEPS = 3
+
+# The images given to the discriminator, real and generated alike, are shifted
+# by up to MAX_SHIFT pixels in each direction. With 500 training images the
+# discriminator otherwise memorizes them and stops guiding the generator.
+MAX_SHIFT = 2
+
+
+def random_shift(images, max_shift=MAX_SHIFT):
+    """Shift every image by its own random offset, filling with zeros.
+
+    The output is differentiable with respect to `images`, so the generator
+    still receives gradients through the shifted images.
+
+    Args:
+        images: shape (B, C, H, W).
+
+    Returns:
+        shifted images, shape (B, C, H, W).
+    """
+    batch_size, _, height, width = images.shape
+    device = images.device
+    padded = F.pad(images, [max_shift] * 4)
+    top = torch.randint(0, 2 * max_shift + 1, (batch_size, 1, 1), device=device)
+    left = torch.randint(0, 2 * max_shift + 1, (batch_size, 1, 1), device=device)
+    index = torch.arange(batch_size, device=device).view(-1, 1, 1)
+    rows = top + torch.arange(height, device=device).view(1, -1, 1)
+    cols = left + torch.arange(width, device=device).view(1, 1, -1)
+    return padded[index, :, rows, cols].permute(0, 3, 1, 2)
+
 
 def discriminator_loss(real_logits, fake_logits):
     """Loss of the discriminator for a batch.
@@ -34,8 +65,9 @@ def discriminator_loss(real_logits, fake_logits):
     Returns:
         loss_d: a scalar tensor.
     """
-    # TODO
-    raise NotImplementedError("mytrain.py: discriminator_loss is not implemented")
+    loss_real = F.binary_cross_entropy_with_logits(real_logits, torch.ones_like(real_logits))
+    loss_fake = F.binary_cross_entropy_with_logits(fake_logits, torch.zeros_like(fake_logits))
+    return loss_real + loss_fake
 
 
 def generator_loss(fake_logits):
@@ -53,8 +85,7 @@ def generator_loss(fake_logits):
     Returns:
         loss_g: a scalar tensor.
     """
-    # TODO
-    raise NotImplementedError("mytrain.py: generator_loss is not implemented")
+    return F.binary_cross_entropy_with_logits(fake_logits, torch.ones_like(fake_logits))
 
 
 def train_one_epoch(generator, discriminator, optimizer_g, optimizer_d, dataloader, device):
@@ -91,5 +122,41 @@ def train_one_epoch(generator, discriminator, optimizer_g, optimizer_d, dataload
             d_real : D(x), probability given to the real images (step 2)
             d_fake : D(G(z)), probability given to the generated images (step 2)
     """
-    # TODO
-    raise NotImplementedError("mytrain.py: train_one_epoch is not implemented")
+    generator.train()
+    discriminator.train()
+
+    totals = {"loss_d": 0.0, "loss_g": 0.0, "d_real": 0.0, "d_fake": 0.0}
+    num_images = 0
+
+    for x in dataloader:
+        x = x.to(device)
+        batch_size = x.size(0)
+        z = torch.randn(batch_size, generator.latent_dim, device=device)
+        fake = generator(z)
+
+        real_logits = discriminator(random_shift(x))
+        fake_logits = discriminator(random_shift(fake.detach()))
+        loss_d = discriminator_loss(real_logits, fake_logits)
+        optimizer_d.zero_grad()
+        loss_d.backward()
+        optimizer_d.step()
+
+        # The first update uses the images generated above, the next ones new images
+        loss_g_sum = 0.0
+        for step in range(GENERATOR_STEPS):
+            if step > 0:
+                z = torch.randn(batch_size, generator.latent_dim, device=device)
+                fake = generator(z)
+            loss_g = generator_loss(discriminator(random_shift(fake)))
+            optimizer_g.zero_grad()
+            loss_g.backward()
+            optimizer_g.step()
+            loss_g_sum += loss_g.item()
+
+        totals["loss_d"] += loss_d.item() * batch_size
+        totals["loss_g"] += loss_g_sum / GENERATOR_STEPS * batch_size
+        totals["d_real"] += torch.sigmoid(real_logits).sum().item()
+        totals["d_fake"] += torch.sigmoid(fake_logits).sum().item()
+        num_images += batch_size
+
+    return {term: total / num_images for term, total in totals.items()}
